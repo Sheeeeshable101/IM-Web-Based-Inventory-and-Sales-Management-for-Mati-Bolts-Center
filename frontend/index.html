@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#12263a">
+  <title>Mati Bolts | Inventory & Sales</title>
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/responsive.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <div id="login-screen" class="login-screen">
+    <form id="login-form" class="login-card">
+      <div class="brand-mark">MB</div>
+      <p class="eyebrow">MATI BOLTS CENTER</p>
+      <h1>Welcome back</h1>
+      <p class="muted">Sign in to manage inventory and sales.</p>
+      <label>Username<input name="username" autocomplete="username" required></label>
+      <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="button primary wide" type="submit">Sign in</button>
+      <p id="login-error" class="error-message" role="alert"></p>
+    </form>
+  </div>
+
+  <div id="app-shell" class="app-shell hidden">
+    <aside class="sidebar">
+      <a class="brand" href="#" aria-label="Mati Bolts home">
+        <span class="brand-mark">MB</span><span><strong>Mati Bolts</strong><small>Inventory & Sales</small></span>
+      </a>
+      <nav id="navigation" aria-label="Main navigation">
+        <button data-page="dashboard" class="nav-link active"><span>▦</span> Dashboard</button>
+        <p class="nav-caption">OPERATIONS</p>
+        <button data-page="inventory" class="nav-link"><span>▤</span> Inventory</button>
+        <button data-page="sales" class="nav-link"><span>＋</span> New sale</button>
+        <button data-page="orders" class="nav-link"><span>≡</span> Orders</button>
+        <button data-page="stock-in" class="nav-link"><span>↓</span> Stock-in</button>
+        <p class="nav-caption">MANAGE</p>
+        <button data-page="categories" class="nav-link admin-only"><span>◫</span> Categories</button>
+        <button data-page="suppliers" class="nav-link"><span>▱</span> Suppliers</button>
+        <button data-page="customers" class="nav-link"><span>♙</span> Customers</button>
+        <button data-page="reports" class="nav-link"><span>▥</span> Reports</button>
+        <button data-page="users" class="nav-link admin-only"><span>♧</span> Users</button>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="avatar" id="user-avatar">U</div>
+        <div class="user-summary"><strong id="user-name">User</strong><small id="user-role">Staff</small></div>
+        <button id="logout-button" class="icon-button" title="Sign out" aria-label="Sign out">↗</button>
+      </div>
+    </aside>
+    <main class="main-content">
+      <header class="topbar">
+        <div><p class="eyebrow" id="page-eyebrow">OVERVIEW</p><h1 id="page-title">Dashboard</h1></div>
+        <div id="page-actions"></div>
+      </header>
+      <div id="toast" class="toast hidden" role="status"></div>
+      <section id="page-content" aria-live="polite"></section>
+    </main>
+  </div>
+  <dialog id="record-dialog" class="record-dialog">
+    <form id="record-form" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow" id="dialog-eyebrow">RECORD</p><h2 id="dialog-title">Add record</h2></div>
+        <button type="button" class="icon-button" data-close-dialog aria-label="Close dialog">×</button></div>
+      <div id="dialog-fields" class="form-grid"></div>
+      <p id="dialog-error" class="error-message" role="alert"></p>
+      <div class="dialog-actions"><button type="button" class="button secondary" data-close-dialog>Cancel</button><button type="submit" class="button primary">Save</button></div>
+    </form>
+  </dialog>
+</body>
+</html>

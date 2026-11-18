@@ -1,0 +1,22 @@
+@media (max-width: 1050px) {
+  .sidebar { width: 215px; }
+  .main-content { margin-left: 215px; }
+  .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 720px) {
+  .sidebar { position: static; width: 100%; padding: 12px; }
+  .brand { padding: 0 6px 12px; }
+  #navigation { display: flex; overflow: auto; gap: 4px; padding-bottom: 2px; }
+  .nav-caption { display: none; }
+  .nav-link { min-width: max-content; min-height: 36px; padding: 0 10px; font-size: 11px; }
+  .sidebar-footer { display: none; }
+  .main-content { margin: 0; padding: 23px 15px 35px; }
+  .topbar { align-items: center; margin-bottom: 22px; }
+  .dashboard-grid, .cart-layout, .report-grid { grid-template-columns: 1fr; }
+  .metric-grid { gap: 9px; }
+  .metric-card { min-height: 105px; padding: 14px; }
+  .metric-value { font-size: 22px; }
+  .form-grid { grid-template-columns: 1fr; }
+  .form-grid .full { grid-column: auto; }
+}
