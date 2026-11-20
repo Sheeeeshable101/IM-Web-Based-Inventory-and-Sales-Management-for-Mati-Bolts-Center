@@ -1,5 +1,5 @@
 const express = require('express');
-const pool = require('../db');
+const db = require('../db');
 const { HttpError, wrap, positiveInteger, nullableId } = require('./common');
 
 const router = express.Router();
@@ -20,120 +20,86 @@ router.post('/orders', wrap(async (req, res) => {
   if (!['Pending', 'Completed'].includes(status)) {
     throw new HttpError(400, 'New orders may be Pending or Completed.');
   }
-  const connection = await pool.getConnection();
-  try {
-    await connection.beginTransaction();
-    let total = 0;
-    const pricedItems = [];
-    for (const item of items) {
-      const [products] = await connection.execute(
-        'SELECT id, name, price, stock_quantity FROM product WHERE id = ? FOR UPDATE',
-        [item.productId]
-      );
-      const product = products[0];
-      if (!product) throw new HttpError(404, `Product ${item.productId} was not found.`);
-      if (product.stock_quantity < item.quantity) {
-        throw new HttpError(409, `Not enough stock for ${product.name}. Available: ${product.stock_quantity}.`);
-      }
-      const lineTotal = Math.round(product.price * item.quantity * 100) / 100;
-      total = Math.round((total + lineTotal) * 100) / 100;
-      pricedItems.push({ ...item, price: product.price, lineTotal });
-    }
-    if (customerId) {
-      const [customers] = await connection.execute('SELECT id FROM customer WHERE id = ?', [customerId]);
-      if (!customers.length) throw new HttpError(400, 'Selected customer does not exist.');
-    }
-    const [orderResult] = await connection.execute(
-      'INSERT INTO sales_order (customer_id, user_id, total_amount, status) VALUES (?, ?, ?, ?)',
-      [customerId, req.user.id, total, status]
-    );
-    for (const item of pricedItems) {
-      await connection.execute(
-        'INSERT INTO order_item (sales_order_id, product_id, quantity, unit_price, line_total) VALUES (?, ?, ?, ?, ?)',
-        [orderResult.insertId, item.productId, item.quantity, item.price, item.lineTotal]
-      );
-      await connection.execute(
-        'UPDATE product SET stock_quantity = stock_quantity - ? WHERE id = ?',
-        [item.quantity, item.productId]
-      );
-    }
-    await connection.commit();
-    res.status(201).json({ id: orderResult.insertId, total_amount: total, status });
-  } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    connection.release();
-  }
+  const result = await db.execute(db.client.rpc('api_create_order', {
+    p_customer_id: customerId,
+    p_user_id: req.user.id,
+    p_status: status,
+    p_items: items.map((item) => ({ product_id: item.productId, quantity: item.quantity }))
+  }));
+  res.status(201).json(result);
 }));
 
 router.get('/orders', wrap(async (req, res) => {
-  const [rows] = await pool.execute(
-    `SELECT o.id, o.total_amount, o.status, o.created_at, u.name AS staff_name,
-      c.name AS customer_name,
-      (SELECT COUNT(*) FROM order_item oi WHERE oi.sales_order_id = o.id) AS item_count
-     FROM sales_order o JOIN \`user\` u ON u.id = o.user_id
-     LEFT JOIN customer c ON c.id = o.customer_id
-     ORDER BY o.created_at DESC LIMIT 200`
-  );
-  res.json(rows);
+  const orders = await db.execute(db.client
+    .from('sales_order')
+    .select('id, total_amount, status, created_at, user_id, customer_id')
+    .order('created_at', { ascending: false })
+    .limit(200));
+  const orderIds = orders.map((order) => order.id);
+  const userIds = [...new Set(orders.map((order) => order.user_id))];
+  const customerIds = [...new Set(orders.map((order) => order.customer_id).filter(Boolean))];
+  const [users, customers, items] = await Promise.all([
+    userIds.length ? db.allRows(() => db.client.from('user').select('id, name').in('id', userIds)) : [],
+    customerIds.length ? db.allRows(() => db.client.from('customer').select('id, name').in('id', customerIds)) : [],
+    orderIds.length ? db.allRows(() => db.client.from('order_item').select('sales_order_id').in('sales_order_id', orderIds)) : []
+  ]);
+  const userNames = new Map(users.map((user) => [String(user.id), user.name]));
+  const customerNames = new Map(customers.map((customer) => [String(customer.id), customer.name]));
+  const itemCounts = new Map();
+  for (const item of items) {
+    const key = String(item.sales_order_id);
+    itemCounts.set(key, (itemCounts.get(key) || 0) + 1);
+  }
+  res.json(orders.map((order) => ({
+    id: order.id,
+    total_amount: order.total_amount,
+    status: order.status,
+    created_at: order.created_at,
+    staff_name: userNames.get(String(order.user_id)),
+    customer_name: customerNames.get(String(order.customer_id)) || null,
+    item_count: itemCounts.get(String(order.id)) || 0
+  })));
 }));
 
 router.get('/orders/:id', wrap(async (req, res) => {
   const id = positiveInteger(req.params.id, 'id');
-  const [orders] = await pool.execute(
-    `SELECT o.*, u.name AS staff_name, c.name AS customer_name
-     FROM sales_order o JOIN \`user\` u ON u.id = o.user_id
-     LEFT JOIN customer c ON c.id = o.customer_id WHERE o.id = ?`,
-    [id]
-  );
-  if (!orders.length) throw new HttpError(404, 'Order not found.');
-  const [items] = await pool.execute(
-    `SELECT oi.product_id, p.sku, p.name, oi.quantity, oi.unit_price, oi.line_total
-     FROM order_item oi JOIN product p ON p.id = oi.product_id WHERE oi.sales_order_id = ?`,
-    [id]
-  );
-  res.json({ ...orders[0], items });
+  const order = await db.execute(db.client.from('sales_order').select('*').eq('id', id).maybeSingle());
+  if (!order) throw new HttpError(404, 'Order not found.');
+  const [users, customers, items] = await Promise.all([
+    db.execute(db.client.from('user').select('id, name').eq('id', order.user_id)),
+    order.customer_id
+      ? db.execute(db.client.from('customer').select('id, name').eq('id', order.customer_id))
+      : [],
+    db.allRows(() => db.client.from('order_item')
+      .select('product_id, quantity, unit_price, line_total')
+      .eq('sales_order_id', id))
+  ]);
+  const productIds = [...new Set(items.map((item) => item.product_id))];
+  const products = productIds.length
+    ? await db.allRows(() => db.client.from('product').select('id, sku, name').in('id', productIds))
+    : [];
+  const productDetails = new Map(products.map((product) => [String(product.id), product]));
+  res.json({
+    ...order,
+    staff_name: users[0]?.name,
+    customer_name: customers[0]?.name || null,
+    items: items.map((item) => ({
+      ...item,
+      sku: productDetails.get(String(item.product_id))?.sku,
+      name: productDetails.get(String(item.product_id))?.name
+    }))
+  });
 }));
 
 router.patch('/orders/:id/status', wrap(async (req, res) => {
   if (!['Pending', 'Completed', 'Cancelled'].includes(req.body.status)) {
     throw new HttpError(400, 'status must be Pending, Completed, or Cancelled.');
   }
-  const connection = await pool.getConnection();
-  try {
-    await connection.beginTransaction();
-    const [orders] = await connection.execute(
-      'SELECT id, status FROM sales_order WHERE id = ? FOR UPDATE',
-      [positiveInteger(req.params.id, 'id')]
-    );
-    const order = orders[0];
-    if (!order) throw new HttpError(404, 'Order not found.');
-    if (order.status === 'Cancelled') throw new HttpError(409, 'A cancelled order cannot be reopened.');
-    if (order.status === 'Completed' && req.body.status === 'Pending') {
-      throw new HttpError(409, 'A completed order cannot be changed back to pending.');
-    }
-    if (req.body.status === 'Cancelled' && order.status !== 'Cancelled') {
-      const [items] = await connection.execute(
-        'SELECT product_id, quantity FROM order_item WHERE sales_order_id = ? ORDER BY product_id',
-        [order.id]
-      );
-      for (const item of items) {
-        await connection.execute(
-          'UPDATE product SET stock_quantity = stock_quantity + ? WHERE id = ?',
-          [item.quantity, item.product_id]
-        );
-      }
-    }
-    await connection.execute('UPDATE sales_order SET status = ? WHERE id = ?', [req.body.status, order.id]);
-    await connection.commit();
-    res.json({ message: 'Order status updated.', status: req.body.status });
-  } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    connection.release();
-  }
+  const result = await db.execute(db.client.rpc('api_update_order_status', {
+    p_order_id: positiveInteger(req.params.id, 'id'),
+    p_status: req.body.status
+  }));
+  res.json(result);
 }));
 
 module.exports = router;

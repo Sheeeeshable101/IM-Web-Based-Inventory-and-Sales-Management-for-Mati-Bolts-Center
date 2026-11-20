@@ -1,49 +1,33 @@
-const { Pool, types } = require('pg');
+const { createClient } = require('@supabase/supabase-js');
 
-types.setTypeParser(1082, (value) => value);
-types.setTypeParser(1114, (value) => value);
+const supabaseUrl = process.env.SUPABASE_URL;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-if (!process.env.SUPABASE_DB_URL) {
-  throw new Error('SUPABASE_DB_URL must be set to the Supabase PostgreSQL connection string.');
+if (!supabaseUrl || !serviceRoleKey) {
+  throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set for the Supabase Data API.');
 }
 
-const pgPool = new Pool({
-  connectionString: process.env.SUPABASE_DB_URL,
-  max: 10
+const client = createClient(supabaseUrl, serviceRoleKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false
+  }
 });
 
-function postgresSql(sql) {
-  let parameterIndex = 0;
-  return sql
-    .replace(/`([^`]+)`/g, '"$1"')
-    .replace(/\?/g, () => `$${++parameterIndex}`);
+async function execute(query) {
+  const { data, error } = await query;
+  if (error) throw error;
+  return data;
 }
 
-async function execute(client, sql, values = []) {
-  let statement = postgresSql(sql);
-  const isInsert = /^\s*INSERT\b/i.test(sql);
-  if (isInsert && !/\bRETURNING\b/i.test(statement)) statement += ' RETURNING id';
-
-  const result = await client.query(statement, values);
-  if (/^\s*SELECT\b/i.test(sql)) return [result.rows];
-  return [{
-    affectedRows: result.rowCount,
-    insertId: isInsert && result.rows.length ? result.rows[0].id : undefined
-  }];
+async function allRows(buildQuery, pageSize = 1000) {
+  const rows = [];
+  for (let from = 0; ; from += pageSize) {
+    const page = await execute(buildQuery().range(from, from + pageSize - 1));
+    rows.push(...page);
+    if (page.length < pageSize) return rows;
+  }
 }
 
-module.exports = {
-  execute: (sql, values) => execute(pgPool, sql, values),
-  query: (sql, values) => pgPool.query(sql, values),
-  getConnection: async () => {
-    const client = await pgPool.connect();
-    return {
-      execute: (sql, values) => execute(client, sql, values),
-      beginTransaction: () => client.query('BEGIN'),
-      commit: () => client.query('COMMIT'),
-      rollback: () => client.query('ROLLBACK'),
-      release: () => client.release()
-    };
-  },
-  end: () => pgPool.end()
-};
+module.exports = { client, execute, allRows };

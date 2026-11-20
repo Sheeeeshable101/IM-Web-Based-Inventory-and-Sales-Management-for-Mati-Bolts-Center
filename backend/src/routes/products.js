@@ -1,5 +1,5 @@
 const express = require('express');
-const pool = require('../db');
+const db = require('../db');
 const { HttpError, wrap, requireFields, positiveInteger, nullableId, nonNegativeMoney } = require('./common');
 const { requireAdmin } = require('../middleware/auth');
 
@@ -13,71 +13,70 @@ function productValues(body) {
   if (body.stock_quantity !== undefined) {
     throw new HttpError(400, 'Use the stock-in endpoint to change inventory quantities.');
   }
-  return [
-    String(body.sku).trim(),
-    String(body.name).trim(),
-    positiveInteger(body.category_id, 'category_id'),
-    nullableId(body.supplier_id, 'supplier_id'),
-    body.size ? String(body.size).trim() : null,
-    body.material ? String(body.material).trim() : null,
-    nonNegativeMoney(body.price, 'price'),
-    body.reorder_level === undefined ? 0 : positiveInteger(body.reorder_level, 'reorder_level', true)
-  ];
+  return {
+    sku: String(body.sku).trim(),
+    name: String(body.name).trim(),
+    category_id: positiveInteger(body.category_id, 'category_id'),
+    supplier_id: nullableId(body.supplier_id, 'supplier_id'),
+    size: body.size ? String(body.size).trim() : null,
+    material: body.material ? String(body.material).trim() : null,
+    price: nonNegativeMoney(body.price, 'price'),
+    reorder_level: body.reorder_level === undefined ? 0 : positiveInteger(body.reorder_level, 'reorder_level', true)
+  };
 }
 
 router.get('/products', wrap(async (req, res) => {
-  const conditions = [];
-  const values = [];
-  if (req.query.q) {
-    conditions.push('(p.name ILIKE ? OR p.sku ILIKE ? OR p.material ILIKE ?)');
-    const term = `%${String(req.query.q).trim()}%`;
-    values.push(term, term, term);
-  }
-  if (req.query.category_id) {
-    conditions.push('p.category_id = ?');
-    values.push(positiveInteger(req.query.category_id, 'category_id'));
-  }
-  if (req.query.low === '1') conditions.push('p.stock_quantity <= p.reorder_level');
-  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  const [rows] = await pool.execute(
-    `SELECT p.*, c.name AS category_name, s.name AS supplier_name
-     FROM product p JOIN category c ON c.id = p.category_id
-     LEFT JOIN supplier s ON s.id = p.supplier_id
-     ${where} ORDER BY p.name`,
-    values
-  );
+  const [products, categories, suppliers] = await Promise.all([
+    db.allRows(() => db.client.from('product').select('*').order('name')),
+    db.allRows(() => db.client.from('category').select('id, name')),
+    db.allRows(() => db.client.from('supplier').select('id, name'))
+  ]);
+  const categoryNames = new Map(categories.map((category) => [String(category.id), category.name]));
+  const supplierNames = new Map(suppliers.map((supplier) => [String(supplier.id), supplier.name]));
+  const term = String(req.query.q || '').trim().toLowerCase();
+  const categoryId = req.query.category_id ? String(positiveInteger(req.query.category_id, 'category_id')) : null;
+  const rows = products
+    .map((product) => ({
+      ...product,
+      category_name: categoryNames.get(String(product.category_id)) || null,
+      supplier_name: supplierNames.get(String(product.supplier_id)) || null
+    }))
+    .filter((product) => {
+      const matchesTerm = !term || [product.name, product.sku, product.material]
+        .some((value) => String(value || '').toLowerCase().includes(term));
+      const matchesCategory = !categoryId || String(product.category_id) === categoryId;
+      const matchesLowStock = req.query.low !== '1' || Number(product.stock_quantity) <= Number(product.reorder_level);
+      return matchesTerm && matchesCategory && matchesLowStock;
+    });
   res.json(rows);
 }));
 
 router.post('/products', wrap(async (req, res) => {
-  const values = productValues(req.body);
-  const [result] = await pool.execute(
-    `INSERT INTO product
-      (sku, name, category_id, supplier_id, size, material, price, reorder_level)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    values
-  );
-  res.status(201).json({ id: result.insertId });
+  const product = await db.execute(db.client
+    .from('product')
+    .insert(productValues(req.body))
+    .select('id')
+    .single());
+  res.status(201).json({ id: product.id });
 }));
 
 router.put('/products/:id', wrap(async (req, res) => {
-  const values = productValues(req.body);
-  const [result] = await pool.execute(
-    `UPDATE product SET sku = ?, name = ?, category_id = ?, supplier_id = ?,
-      size = ?, material = ?, price = ?, reorder_level = ?
-     WHERE id = ?`,
-    [...values, positiveInteger(req.params.id, 'id')]
-  );
-  if (!result.affectedRows) {
-    const [existing] = await pool.execute('SELECT id FROM product WHERE id = ?', [positiveInteger(req.params.id, 'id')]);
-    if (!existing.length) throw new HttpError(404, 'Product not found.');
-  }
+  const [updated] = await db.execute(db.client
+    .from('product')
+    .update(productValues(req.body))
+    .eq('id', positiveInteger(req.params.id, 'id'))
+    .select('id'));
+  if (!updated) throw new HttpError(404, 'Product not found.');
   res.json({ message: 'Product updated.' });
 }));
 
 router.delete('/products/:id', requireAdmin, wrap(async (req, res) => {
-  const [result] = await pool.execute('DELETE FROM product WHERE id = ?', [positiveInteger(req.params.id, 'id')]);
-  if (!result.affectedRows) throw new HttpError(404, 'Product not found.');
+  const [deleted] = await db.execute(db.client
+    .from('product')
+    .delete()
+    .eq('id', positiveInteger(req.params.id, 'id'))
+    .select('id'));
+  if (!deleted) throw new HttpError(404, 'Product not found.');
   res.status(204).end();
 }));
 

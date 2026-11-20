@@ -1,22 +1,26 @@
 const express = require('express');
-const pool = require('../db');
+const db = require('../db');
 const { wrap, requireFields } = require('./common');
 const { requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
 router.get('/categories', wrap(async (req, res) => {
-  const [rows] = await pool.execute('SELECT id, name, description FROM category ORDER BY name');
+  const rows = await db.allRows(() => db.client
+    .from('category')
+    .select('id, name, description')
+    .order('name'));
   res.json(rows);
 }));
 
 router.post('/categories', requireAdmin, wrap(async (req, res) => {
   requireFields(req.body, ['name']);
-  const [result] = await pool.execute(
-    'INSERT INTO category (name, description) VALUES (?, ?)',
-    [String(req.body.name).trim(), req.body.description || null]
-  );
-  res.status(201).json({ id: result.insertId });
+  const category = await db.execute(db.client
+    .from('category')
+    .insert({ name: String(req.body.name).trim(), description: req.body.description || null })
+    .select('id')
+    .single());
+  res.status(201).json({ id: category.id });
 }));
 
 module.exports = router;

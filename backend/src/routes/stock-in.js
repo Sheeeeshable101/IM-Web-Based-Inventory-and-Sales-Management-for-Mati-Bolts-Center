@@ -1,18 +1,33 @@
 const express = require('express');
-const pool = require('../db');
-const { HttpError, wrap, requireFields, positiveInteger, nonNegativeMoney, nullableId } = require('./common');
+const db = require('../db');
+const { wrap, requireFields, positiveInteger, nonNegativeMoney, nullableId } = require('./common');
 
 const router = express.Router();
 
 router.get('/stock-in', wrap(async (req, res) => {
-  const [rows] = await pool.execute(
-    `SELECT si.*, p.sku, p.name AS product_name, s.name AS supplier_name, u.name AS staff_name
-     FROM stock_in si JOIN product p ON p.id = si.product_id
-     LEFT JOIN supplier s ON s.id = si.supplier_id
-     JOIN \`user\` u ON u.id = si.user_id
-     ORDER BY si.received_at DESC LIMIT 200`
-  );
-  res.json(rows);
+  const rows = await db.execute(db.client
+    .from('stock_in')
+    .select('*')
+    .order('received_at', { ascending: false })
+    .limit(200));
+  const productIds = [...new Set(rows.map((row) => row.product_id))];
+  const supplierIds = [...new Set(rows.map((row) => row.supplier_id).filter(Boolean))];
+  const userIds = [...new Set(rows.map((row) => row.user_id))];
+  const [products, suppliers, users] = await Promise.all([
+    productIds.length ? db.allRows(() => db.client.from('product').select('id, sku, name').in('id', productIds)) : [],
+    supplierIds.length ? db.allRows(() => db.client.from('supplier').select('id, name').in('id', supplierIds)) : [],
+    userIds.length ? db.allRows(() => db.client.from('user').select('id, name').in('id', userIds)) : []
+  ]);
+  const productById = new Map(products.map((product) => [String(product.id), product]));
+  const supplierNames = new Map(suppliers.map((supplier) => [String(supplier.id), supplier.name]));
+  const userNames = new Map(users.map((user) => [String(user.id), user.name]));
+  res.json(rows.map((row) => ({
+    ...row,
+    sku: productById.get(String(row.product_id))?.sku,
+    product_name: productById.get(String(row.product_id))?.name,
+    supplier_name: supplierNames.get(String(row.supplier_id)) || null,
+    staff_name: userNames.get(String(row.user_id))
+  })));
 }));
 
 router.post('/stock-in', wrap(async (req, res) => {
@@ -21,28 +36,15 @@ router.post('/stock-in', wrap(async (req, res) => {
   const quantity = positiveInteger(req.body.quantity, 'quantity');
   const costPerUnit = nonNegativeMoney(req.body.cost_per_unit, 'cost_per_unit');
   const supplierId = nullableId(req.body.supplier_id, 'supplier_id');
-  const connection = await pool.getConnection();
-  try {
-    await connection.beginTransaction();
-    const [products] = await connection.execute('SELECT id FROM product WHERE id = ? FOR UPDATE', [productId]);
-    if (!products.length) throw new HttpError(404, 'Product not found.');
-    const [result] = await connection.execute(
-      `INSERT INTO stock_in (product_id, supplier_id, user_id, quantity, cost_per_unit, notes)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [productId, supplierId, req.user.id, quantity, costPerUnit, req.body.notes || null]
-    );
-    await connection.execute(
-      'UPDATE product SET stock_quantity = stock_quantity + ? WHERE id = ?',
-      [quantity, productId]
-    );
-    await connection.commit();
-    res.status(201).json({ id: result.insertId });
-  } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    connection.release();
-  }
+  const result = await db.execute(db.client.rpc('api_record_stock_in', {
+    p_product_id: productId,
+    p_supplier_id: supplierId,
+    p_user_id: req.user.id,
+    p_quantity: quantity,
+    p_cost_per_unit: costPerUnit,
+    p_notes: req.body.notes || null
+  }));
+  res.status(201).json(result);
 }));
 
 module.exports = router;

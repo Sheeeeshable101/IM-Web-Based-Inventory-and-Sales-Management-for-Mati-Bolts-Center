@@ -1,21 +1,26 @@
 const express = require('express');
-const pool = require('../db');
+const db = require('../db');
 const { wrap, requireFields } = require('./common');
 
 const router = express.Router();
 
 router.get('/customers', wrap(async (req, res) => {
-  const [rows] = await pool.execute('SELECT * FROM customer ORDER BY name');
+  const rows = await db.allRows(() => db.client.from('customer').select('*').order('name'));
   res.json(rows);
 }));
 
 router.post('/customers', wrap(async (req, res) => {
   requireFields(req.body, ['name']);
-  const [result] = await pool.execute(
-    'INSERT INTO customer (name, phone, email) VALUES (?, ?, ?)',
-    [String(req.body.name).trim(), req.body.phone || null, req.body.email || null]
-  );
-  res.status(201).json({ id: result.insertId });
+  const customer = await db.execute(db.client
+    .from('customer')
+    .insert({
+      name: String(req.body.name).trim(),
+      phone: req.body.phone || null,
+      email: req.body.email || null
+    })
+    .select('id')
+    .single());
+  res.status(201).json({ id: customer.id });
 }));
 
 module.exports = router;

@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const pool = require('../db');
+const db = require('../db');
 
 function requireAuth(req, res, next) {
   const header = req.get('authorization') || '';
@@ -10,11 +10,9 @@ function requireAuth(req, res, next) {
 
   try {
     const claims = jwt.verify(token, process.env.JWT_SECRET);
-    pool.execute(
-      'SELECT id, name, username, role, active FROM `user` WHERE id = ? LIMIT 1',
-      [claims.id]
-    ).then(([rows]) => {
-      const user = rows[0];
+    db.execute(
+      db.client.from('user').select('id, name, username, role, active').eq('id', claims.id).maybeSingle()
+    ).then((user) => {
       if (!user || !user.active) {
         return res.status(401).json({ error: 'Your account is inactive or no longer exists.' });
       }
